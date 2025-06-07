@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>0-150 km/h Constant-Acceleration Demo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{
+    --track-h :80px;
+    --name-w  :160px;
+    --blue:#0077ff; --green:#27ae60;
+  }
+
+  body{font-family:system-ui,sans-serif;background:#fafafa;margin:1.5rem;}
+  h1{text-align:center;margin-bottom:.5rem;}
+  #startBtn{display:block;margin:0 auto 1.3rem;padding:.6rem 1.4rem;
+            font-size:1rem;background:var(--blue);color:#fff;border:none;border-radius:6px;cursor:pointer;}
+  #startBtn:disabled{opacity:.4;cursor:not-allowed;}
+
+  .row   {display:flex;align-items:center;margin-bottom:1rem;}
+  .name  {width:var(--name-w);text-align:right;padding-right:.75rem;font-weight:600;}
+  .track {position:relative;flex:1;border-top:2px solid #ccc;height:var(--track-h);}
+
+  .car   {position:absolute;top:-18px;display:inline-flex;align-items:center;justify-content:center;
+          border-radius:6px;padding:4px;transition:background .25s;}
+  .car.blue{background:var(--blue);} .car.green{background:var(--green);}
+  .car img{width:64px;height:auto;display:block;}
+
+  .speed{position:absolute;bottom:100%;left:50%;transform:translate(-50%,-6px);
+         font-family:monospace;font-size:13px;padding:2px 6px;border-radius:12px;
+         background:#e0e0e0;color:#000;white-space:nowrap;pointer-events:none;transition:.25s;}
+  .speed.green{background:rgba(39,174,96,.9);}
+
+  /* ruler & labels */
+  .ruler{margin-left:calc(var(--name-w) + .75rem);height:32px;border-top:2px solid #ccc;position:relative;}
+  .ruler::after{content:'';position:absolute;inset:0;pointer-events:none;
+                background-size:var(--minor) 100%,var(--major) 100%;
+                background-image:
+                  repeating-linear-gradient(to right,transparent 0,transparent calc(var(--minor)-1px),
+                    #ccc calc(var(--minor)-1px),#ccc var(--minor)),
+                  repeating-linear-gradient(to right,transparent 0,transparent calc(var(--major)-1px),
+                    #999 calc(var(--major)-1px),#999 var(--major));}
+
+  /* ✅ NEW label style */
+  .tickLabel{position:absolute;top:4px;font-size:12px;color:#444;font-family:monospace;
+             transform:translateX(-50%);}
+  .unitNote{font-size:.9rem;color:#666;text-align:center;margin-top:-8px;}
+</style>
+</head>
+<body>
+<h1>0-150 km/h Constant-Acceleration Demo</h1>
+<p class="unitNote">Click “Start” • constant-a assumption • bottom ruler shows distance (m)</p>
+<button id="startBtn">Start</button>
+
+<script>
+/**********************************************************************
+ * 1) CARS + filenames
+ *********************************************************************/
+const cars=[
+  { name:'Model S Plaid',       zeroTo100:2.4,  img:'Model-S.png'  },
+  { name:'Model 3 Performance', zeroTo100:3.1,  img:'Model-3.png'  },
+  { name:'Model Y LR AWD',      zeroTo100:4.9,  img:'Model-Y.png'  },
+  { name:'BMW 225xe Hybrid',    zeroTo100:6.7,  img:'BMW.png'      },
+  { name:'Škoda Citigo 75 hp',  zeroTo100:13.9, img:'Citigo.png'   }
+];
+
+/**********************************************************************
+ * 2) SETTINGS
+ *********************************************************************/
+const TARGET_KMH=150, GREEN_AT=100;
+const VIS_METERS=400, PX_PER_METER=3;
+const MINOR_M=25, MAJOR_M=100;
+const TIME_SCALE=1;
+
+/**********************************************************************
+ * 3) CONSTANTS
+ *********************************************************************/
+const KMH2MPS=k=>k*1000/3600,  V_MAX=KMH2MPS(TARGET_KMH), MSPS=1000;
+
+/**********************************************************************
+ * 4) BUILD LANES
+ *********************************************************************/
+cars.forEach(c=>{
+  const row = Object.assign(document.createElement('div'),{className:'row'});
+  row.appendChild(Object.assign(document.createElement('span'),
+      {className:'name',textContent:c.name}));
+
+  const track = row.appendChild(Object.assign(document.createElement('div'),
+      {className:'track'}));
+
+  const carEl = track.appendChild(Object.assign(document.createElement('div'),
+      {className:'car blue'}));
+  carEl.innerHTML=`<img src="${c.img}" alt="${c.name}">`;
+
+  const speedEl = carEl.appendChild(Object.assign(document.createElement('span'),
+      {className:'speed',textContent:'0.0 km/h'}));
+
+  document.body.appendChild(row);
+
+  Object.assign(c,{
+    accel:KMH2MPS(100)/c.zeroTo100,
+    t150: V_MAX/(KMH2MPS(100)/c.zeroTo100),
+    carEl,speedEl,finished:false
+  });
+});
+
+/**********************************************************************
+ * 5) RULER WITH LABELS  ✅ NEW
+ *********************************************************************/
+const ruler=document.createElement('div');
+ruler.className='ruler';
+ruler.style.setProperty('--minor',`${MINOR_M*PX_PER_METER}px`);
+ruler.style.setProperty('--major',`${MAJOR_M*PX_PER_METER}px`);
+document.body.appendChild(ruler);
+
+/* add numeric labels at every major tick */
+for(let d=0; d<=VIS_METERS; d+=MAJOR_M){
+  const lbl=document.createElement('span');
+  lbl.className='tickLabel';
+  lbl.textContent=`${d} m`;
+  lbl.style.left=`${d*PX_PER_METER}px`;
+  ruler.appendChild(lbl);
+}
+
+/**********************************************************************
+ * 6) START / RESTART
+ *********************************************************************/
+let t0=null, raf=null;
+const btn=document.getElementById('startBtn');
+btn.addEventListener('click',()=>{
+  btn.disabled=true; btn.textContent='Running…';
+  resetCars(); t0=null; raf=requestAnimationFrame(loop);
+});
+function resetCars(){
+  cars.forEach(c=>{
+    c.finished=false;
+    c.carEl.style.transform='translateX(0)';
+    c.carEl.classList.remove('green'); c.carEl.classList.add('blue');
+    c.speedEl.classList.remove('green'); c.speedEl.style.background='#e0e0e0';
+    c.speedEl.textContent='0.0 km/h';
+  });
+}
+
+/**********************************************************************
+ * 7) MAIN LOOP
+ *********************************************************************/
+function loop(ts){
+  if(!t0) t0=ts;
+  const t=(ts-t0)/MSPS*TIME_SCALE;
+  let allDone=true;
+
+  cars.forEach(c=>{
+    const {accel,t150}=c;
+    let v=accel*t, s=.5*accel*t*t;
+    if(t>=t150){ v=V_MAX; s=.5*accel*t150*t150 + v*(t-t150); }
+
+    const vK=(v*3.6).toFixed(1);
+    c.speedEl.textContent=`${vK} km/h`;
+    c.carEl.style.transform=`translateX(${s*PX_PER_METER}px)`;
+
+    if(vK>=GREEN_AT){
+      c.carEl.classList.replace('blue','green');
+      c.speedEl.classList.add('green');
+    }
+    if(vK>=TARGET_KMH && s*PX_PER_METER > VIS_METERS*PX_PER_METER) c.finished=true;
+    if(!c.finished) allDone=false;
+  });
+
+  allDone ? (btn.textContent='Restart', btn.disabled=false)
+          : raf=requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
